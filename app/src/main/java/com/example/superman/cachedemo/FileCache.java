@@ -4,8 +4,11 @@ package com.example.superman.cachedemo;
  */
 
 import android.content.Context;
+import android.os.AsyncTask;
 import android.os.Environment;
 import android.util.Log;
+import android.widget.TextView;
+import android.widget.Toast;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -15,6 +18,7 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.lang.ref.SoftReference;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
@@ -35,7 +39,6 @@ public class FileCache {
 
     private String seed = "asd1234fasadsgaqtqtq";
 
-
     public boolean judgeFile() {
         File f = getDiskCacheDir(context, hashKeyForDisk(path));  //加密后的文件
         //存在并且有内容
@@ -53,15 +56,13 @@ public class FileCache {
 
     /**
      * 解密
+     *
      * @return
      * @throws IOException
      */
     public boolean decryptFile() throws IOException {
         boolean result;
-//        File temp = getDiskCacheDir(context, "temp");
-//        if (!temp.exists()) {
-//            temp.mkdirs();
-//        }
+
         File f = getDiskCacheDir(context, hashKeyForDisk(path).concat("_temp").concat(path.substring(path.lastIndexOf("."))));
         if (!f.exists()) {
             f.createNewFile();
@@ -96,6 +97,7 @@ public class FileCache {
         this.context = context;
         originalFile = getDiskCacheDir(context, hashKeyForDisk(path).concat(path.substring(path.lastIndexOf("."))));
         decryptFile = getDiskCacheDir(context, hashKeyForDisk(path));
+
         if (!originalFile.exists()) {
             try {
                 originalFile.createNewFile();
@@ -112,22 +114,77 @@ public class FileCache {
         }
     }
 
-    public void downLoad() {
-        new Thread() {
-            @Override
-            public void run() {
-                super.run();
-                try {
-                    downloadUrlToStream(path, new FileOutputStream(originalFile));
-                } catch (FileNotFoundException e) {
-                    e.printStackTrace();
-                }
-            }
-        }.start();
+    MyAsyncTask asyncTask;
 
+    public void downLoad() {
+        asyncTask = new MyAsyncTask(this);
+        asyncTask.execute(path);
     }
 
-    private boolean downloadUrlToStream(String urlString, OutputStream outputStream) {
+    private static class MyAsyncTask extends AsyncTask<String, Integer, Void> {
+
+        SoftReference<FileCache> softReference;
+        FileCache fileCache;
+
+        public MyAsyncTask(FileCache fileCache) {
+            softReference = new SoftReference<FileCache>(fileCache);
+        }
+
+        @Override
+        protected void onPreExecute() {
+            super.onPreExecute();
+            Log.e("TTTTTT", "开始执行");
+        }
+
+        @Override
+        protected Void doInBackground(String... strings) {
+            if (softReference == null || softReference.get() == null) {
+                return null;
+            }
+
+            fileCache = softReference.get();
+            try {
+                fileCache.downloadUrlToStream(strings[0], new FileOutputStream(fileCache.originalFile), new ProgressUpdateListener() {
+                    @Override
+                    public void onProgressUpdate(int value) {
+                        Log.e("TAG", value + "");
+                        publishProgress(value);
+                    }
+                });
+            } catch (FileNotFoundException e) {
+                e.printStackTrace();
+            }
+            return null;
+        }
+
+
+        @Override
+        protected void onProgressUpdate(Integer... values) {
+            super.onProgressUpdate(values);
+            if (fileCache != null && fileCache.listener != null && values != null)
+                fileCache.listener.onProgress(values[0]);
+
+        }
+
+        @Override
+        protected void onCancelled() {
+            super.onCancelled();
+            Log.e("TAG", "cancel");
+        }
+
+        @Override
+        protected void onPostExecute(Void aVoid) {
+            super.onPostExecute(aVoid);
+            Log.e("TTTTTT", "结束执行");
+        }
+    }
+
+    interface ProgressUpdateListener {
+        void onProgressUpdate(int value);
+    }
+
+
+    private boolean downloadUrlToStream(String urlString, OutputStream outputStream, ProgressUpdateListener progressUpdateListener) {
 
         HttpURLConnection urlConnection = null;
         BufferedOutputStream out = null;
@@ -138,7 +195,6 @@ public class FileCache {
             urlConnection = (HttpURLConnection) url.openConnection();
             in = new BufferedInputStream(urlConnection.getInputStream(), 8 * 1024);
 
-
             int total = urlConnection.getContentLength();
             out = new BufferedOutputStream(outputStream, 8 * 1024);
             byte[] b = new byte[1024];
@@ -148,11 +204,13 @@ public class FileCache {
                     out.write(b, 0, len);
                     fileSizeDownloaded += len;
                     Log.e("TTT", "下载进度：" + fileSizeDownloaded);
+                    if (fileSizeDownloaded / total * 100 != 100) {
+                        progressUpdateListener.onProgressUpdate((int) (fileSizeDownloaded * 100.0 / total));
+                    }
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
             }
-
 
             long time1 = System.currentTimeMillis();
             FileInputStream fis = new FileInputStream(originalFile);
@@ -167,7 +225,8 @@ public class FileCache {
             } catch (Exception e) {
                 e.printStackTrace();
             }
-            Log.e("Time",(System.currentTimeMillis()-time1)+"");
+            Log.e("Time", (System.currentTimeMillis() - time1) + "");
+            progressUpdateListener.onProgressUpdate(100);
             return true;
         } catch (final IOException e) {
             e.printStackTrace();
@@ -234,14 +293,30 @@ public class FileCache {
 
     /**
      * 删除解密文件
+     *
      * @return
      */
-    public boolean deleteDecryptFile(){
-       if (originalFile.exists()){
-          return originalFile.delete();
-       }
-       return false;
+    public boolean deleteDecryptFile() {
+        if (originalFile.exists()) {
+            return originalFile.delete();
+        }
+        return false;
     }
 
+    public void cancel() {
+        if (asyncTask != null && asyncTask.getStatus() == AsyncTask.Status.RUNNING) {
+            asyncTask.cancel(true);
+        }
+    }
+
+    private DownloadProgreeListener listener;
+
+    public void setDownloadProgreeListener(DownloadProgreeListener listener) {
+        this.listener = listener;
+    }
+
+    public interface DownloadProgreeListener {
+        void onProgress(int progress);
+    }
 
 }
